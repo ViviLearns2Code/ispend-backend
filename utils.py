@@ -1,5 +1,15 @@
 import pymongo as pm
-from datetime import datetime, date
+from datetime import timedelta, datetime, date
+from jose import jwt, JWTError
+
+
+def generate_jwt(content, secret_key, algorithm, expire_minutes=15):
+  expire_delta = timedelta(minutes=expire_minutes)
+  to_encode = content.copy()
+  expire = datetime.utcnow() + expire_delta
+  to_encode.update({"exp": expire})
+  encoded_jwt = jwt.encode(to_encode, secret_key, algorithm)
+  return encoded_jwt
 
 
 class DBService:
@@ -7,6 +17,13 @@ class DBService:
     self.client = pm.MongoClient(uri)
     self.user_db = self.client["users"]["users"]
     self.spend_db = self.client["ispend"]["spends"]
+
+  def create_new_user(self, google_id, google_name):
+    user = self.user_db.insert_one({
+      "google.id": google_id,
+      "google.name": google_name
+    })
+    return user
 
   def find_user_by_google_id(self, google_id):
     user = self.user_db.find_one({ "google.id": google_id })

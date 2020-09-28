@@ -5,8 +5,10 @@ from typing import List
 from fastapi import FastAPI
 from enum import Enum
 from pydantic import BaseModel
-from utils import DBService
-
+from google.oauth2 import id_token
+from google.auth.transport import requests
+from utils import DBService, generate_jwt
+from config import GOOGLE, MONGO, JWT
 
 class CategoryName(str, Enum):
     car = "Car"
@@ -39,21 +41,40 @@ class MonthlyStats(BaseModel):
     monthtotal: float
     categorystats: List[CategoryStats]
 
-MONGODB_URI = os.environ.get("MONGO_URI", None)
+MONGODB_URI = os.environ.get("MONGO_URI", MONGO["uri"])
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", GOOGLE["clientID"])
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", JWT["secret"])
+JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", JWT["algorithm"])
+JWT_EXPIRE = os.environ.get("JWT_EXPIRE", 15)
 dataservice = DBService(MONGODB_URI)
 app = FastAPI(title="iSpend", description="Backend powered by FastAPI", version="0.0.1")
 
+
+#oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 @app.get("/")
 async def ready():
     return {"message": "Hello World"}
 
-@app.post("/auth")
-async def authenticate():
-    #1. receive google token -> get user id
+@app.post("/login")
+async def authenticate(token: str):
+    #1. validate google's id_token
+    try:
+        google_id_info = id_token.verify_oauth2_token(token, requests.Request(), GOOGLE_CLIENT_ID)
+        google_id = google_id_info["sub"]
+        google_name = google_id_info["name"]
+    except ValueError:
+        raise Exception("Invalid token") #TODO
     #2. look up user id in db
+    user = dataservice.find_user_by_google_id(google_id)
+    if user is None:
+        user = dataservice.create_new_user(google_id, google_name)
+    user["id"] = str(user.pop("_id"))
+    print(user)
     #3. return jwt token
-    return {"message": "Hello World"}
+    access_token = generate_jwt(user, JWT_SECRET_KEY, JWT_ALGORITHM)
+    # TODO: Cookie?
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/recent", response_model=List[Expense])
 async def get_recent_expenses(user_id: str, to_date: date):
