@@ -2,13 +2,18 @@ import os
 from dateutil.relativedelta import relativedelta
 from datetime import date
 from typing import List
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
+from starlette.status import HTTP_403_FORBIDDEN
 from enum import Enum
 from pydantic import BaseModel
 from google.oauth2 import id_token
 from google.auth.transport import requests
-from utils import DBService, generate_jwt
+from jose import jwt, JWTError
+from utils import DBService, generate_jwt, OAuth2PasswordBearerCookie
 from config import GOOGLE, MONGO, JWT
+
 
 class CategoryName(str, Enum):
     car = "Car"
@@ -41,57 +46,97 @@ class MonthlyStats(BaseModel):
     monthtotal: float
     categorystats: List[CategoryStats]
 
+class IDToken(BaseModel):
+    google_id_token: str
+
 MONGODB_URI = os.environ.get("MONGO_URI", MONGO["uri"])
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", GOOGLE["clientID"])
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", JWT["secret"])
 JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", JWT["algorithm"])
 JWT_EXPIRE = os.environ.get("JWT_EXPIRE", 15)
+COOKIE_DOMAIN = os.environ.get("COOKIE_DOMAIN", "")
+COOKIE_NAME = os.environ.get("COOKIE_NAME", "ACCESS_TOKEN")
+
 dataservice = DBService(MONGODB_URI)
+origins = [
+    "http://localhost:8080",
+]
+
 app = FastAPI(title="iSpend", description="Backend powered by FastAPI", version="0.0.1")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+oauth2_scheme = OAuth2PasswordBearerCookie(tokenUrl="/login")
 
-#oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+async def verify_jwt(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=HTTP_403_FORBIDDEN, detail="Could not validate credentials"
+    )
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    user = dataservice.find_user_by_id(user_id)
+    if user is None:
+        raise credentials_exception
+    return user["_id"]
 
 @app.get("/")
 async def ready():
     return {"message": "Hello World"}
 
 @app.post("/login")
-async def authenticate(token: str):
+async def authenticate(token: IDToken):
     #1. validate google's id_token
+    token = token.dict()["google_id_token"]
     try:
         google_id_info = id_token.verify_oauth2_token(token, requests.Request(), GOOGLE_CLIENT_ID)
         google_id = google_id_info["sub"]
         google_name = google_id_info["name"]
     except ValueError:
-        raise Exception("Invalid token") #TODO
+        raise HTTPException(
+            status_code=HTTP_403_FORBIDDEN, detail="Could not validate token"
+        )
     #2. look up user id in db
     user = dataservice.find_user_by_google_id(google_id)
     if user is None:
         user = dataservice.create_new_user(google_id, google_name)
-    user["id"] = str(user.pop("_id"))
-    print(user)
-    #3. return jwt token
-    access_token = generate_jwt(user, JWT_SECRET_KEY, JWT_ALGORITHM)
-    # TODO: Cookie?
-    return {"access_token": access_token, "token_type": "bearer"}
+    #3. store jwt token in httpOnly cookie with samesite=lax
+    access_token = generate_jwt({"sub": str(user["_id"]), "iss": "ispend", "scope": "full"}, JWT_SECRET_KEY, JWT_ALGORITHM)
+    response = JSONResponse({"login_success": True})
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=f"Bearer {access_token}",
+        domain=COOKIE_DOMAIN,
+        httponly=True,
+        max_age=15*60,
+        expires=15*60)
+    return response
 
 @app.post("/recent", response_model=List[Expense])
-async def get_recent_expenses(user_id: str, to_date: date):
+async def get_recent_expenses(to_date: date, user_id: str = Depends(verify_jwt)):
     #get list of expenses for specified month
     from_date = to_date.replace(day=1)
     expenses = dataservice.read_expenses(user_id, from_date, to_date)
     return expenses
 
 @app.post("/history", response_model=List[CategoryHistory])
-async def get_historic_expenses(user_id: str, to_date: date, months: int):
+async def get_historic_expenses(to_date: date, months: int, user_id: str = Depends(verify_jwt)):
     #get monthly totals (per category) for the last n months
     from_date = to_date-relativedelta(months=months)
     history = dataservice.read_history(user_id, from_date, to_date)
     return history
 
 @app.post("/monthstats", response_model=MonthlyStats)
-async def get_monthly_statistics(user_id: str, to_date: date, top: int):
+async def get_monthly_statistics(to_date: date, top: int, user_id: str = Depends(verify_jwt)):
     # 1) total sum
     # 2) category subtotals
     # 3) top three per category
@@ -103,11 +148,12 @@ async def get_monthly_statistics(user_id: str, to_date: date, top: int):
     }
 
 @app.post("/add", response_model=Expense)
-async def add_new_expense(user_id: str, new_expense: Expense):
+async def add_new_expense(new_expense: Expense, user_id: str = Depends(verify_jwt)):
     expense = dataservice.add_expense(user_id, new_expense.dict())
     return expense
 
 @app.get("/logout")
 async def logout():
-	# do something to jwt cookie session
-    pass
+    response = JSONResponse({"logout_success": True})
+    response.delete_cookie(key=COOKIE_NAME, domain=COOKIE_DOMAIN)
+    return response

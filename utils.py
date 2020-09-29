@@ -1,6 +1,14 @@
 import pymongo as pm
+from bson.objectid import ObjectId
 from datetime import timedelta, datetime, date
 from jose import jwt, JWTError
+from typing import Optional
+from fastapi.openapi.models import OAuthFlows as OAuthFlowsModel
+from fastapi.security import OAuth2
+from fastapi.security.utils import get_authorization_scheme_param
+from fastapi.exceptions import HTTPException
+from starlette.status import HTTP_401_UNAUTHORIZED
+from starlette.requests import Request
 
 
 def generate_jwt(content, secret_key, algorithm, expire_minutes=15):
@@ -10,6 +18,31 @@ def generate_jwt(content, secret_key, algorithm, expire_minutes=15):
   to_encode.update({"exp": expire})
   encoded_jwt = jwt.encode(to_encode, secret_key, algorithm)
   return encoded_jwt
+
+
+class OAuth2PasswordBearerCookie(OAuth2):
+
+  def __init__(self, tokenUrl: str, scheme_name: str = None, scopes: dict = None, auto_error: bool = True):
+    if not scopes:
+        scopes = {}
+    flows = OAuthFlowsModel(password={"tokenUrl": tokenUrl, "scopes": scopes})
+    super().__init__(flows=flows, scheme_name=scheme_name, auto_error=auto_error)
+
+  async def __call__(self, request: Request) -> Optional[str]:
+    authorization: str = request.cookies.get("access_token")
+
+    scheme, param = get_authorization_scheme_param(authorization)
+    if not authorization or scheme.lower() != "bearer":
+        if self.auto_error:
+            raise HTTPException(
+                status_code=HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        else:
+            return None
+
+    return param
 
 
 class DBService:
@@ -27,6 +60,10 @@ class DBService:
 
   def find_user_by_google_id(self, google_id):
     user = self.user_db.find_one({ "google.id": google_id })
+    return user
+
+  def find_user_by_id(self, user_id):
+    user = self.user_db.find_one({ "_id": ObjectId(user_id) })
     return user
 
   def add_user(self, user_obj):
