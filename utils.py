@@ -1,14 +1,13 @@
 import pymongo as pm
 from bson.objectid import ObjectId
-from datetime import timedelta, datetime, date
+from datetime import timedelta, datetime, date, timezone
 from jose import jwt, JWTError
 from typing import Optional
 from fastapi.openapi.models import OAuthFlows as OAuthFlowsModel
 from fastapi.security import OAuth2
 from fastapi.security.utils import get_authorization_scheme_param
 from fastapi.exceptions import HTTPException
-from starlette.status import HTTP_401_UNAUTHORIZED
-from starlette.requests import Request
+from fastapi import Request, status
 
 
 def generate_jwt(content, secret_key, algorithm, expire_minutes=15):
@@ -22,20 +21,20 @@ def generate_jwt(content, secret_key, algorithm, expire_minutes=15):
 
 class OAuth2PasswordBearerCookie(OAuth2):
 
-  def __init__(self, tokenUrl: str, scheme_name: str = None, scopes: dict = None, auto_error: bool = True):
+  def __init__(self, tokenUrl:str, scheme_name:str=None, scopes:dict=None, auto_error:bool=True, cookie_name="ACESS_TOKEN"):
+    self.cookie_name = cookie_name
     if not scopes:
         scopes = {}
     flows = OAuthFlowsModel(password={"tokenUrl": tokenUrl, "scopes": scopes})
     super().__init__(flows=flows, scheme_name=scheme_name, auto_error=auto_error)
 
   async def __call__(self, request: Request) -> Optional[str]:
-    authorization: str = request.cookies.get("access_token")
-
+    authorization = request.cookies.get(self.cookie_name)
     scheme, param = get_authorization_scheme_param(authorization)
     if not authorization or scheme.lower() != "bearer":
         if self.auto_error:
             raise HTTPException(
-                status_code=HTTP_401_UNAUTHORIZED,
+                status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Not authenticated",
                 headers={"WWW-Authenticate": "Bearer"},
             )
@@ -71,19 +70,20 @@ class DBService:
     return user
 
   def add_expense(self, user_id: str, user_expense):
-    #duplicates are possible
-    user_expense["date"] = datetime.combine(user_expense["date"], datetime.min.time())
+    user_expense["date"] = datetime(user_expense["date"].year, user_expense["date"].month, user_expense["date"].day, 0, 0, 0, tzinfo=timezone.utc)
+
     new_entry = {
      "userId": user_id,
      "expense": user_expense
     }
-    _ = self.spend_db.insert_one(new_entry)
-    return user_expense
+    new_id = self.spend_db.insert_one(new_entry).inserted_id
+    new_entry = self.spend_db.find_one({"_id": new_id})
+    return {"id": str(new_entry["_id"]), **new_entry["expense"]}
 
   def read_expenses(self, user_id: str, from_date: datetime.date, to_date: datetime.date):
     #convert date to datetime for mongodb query
-    from_dt = datetime.combine(from_date, datetime.min.time())
-    to_dt = datetime.combine(to_date, datetime.min.time())
+    from_dt = datetime(from_date.year, from_date.month, from_date.day, 0, 0, 0, tzinfo=timezone.utc)
+    to_dt = datetime(to_date.year, to_date.month, to_date.day, 23, 59, 59, tzinfo=timezone.utc)
     pipeline = [
     {
       "$match": {
@@ -99,14 +99,14 @@ class DBService:
         "userId": 0
       }
     }]
-    month_data = self.spend_db.aggregate(pipeline)
-    return [e["expense"] for e in month_data]
+    month_data = self.spend_db.aggregate(pipeline, allowDiskUse=True)
+    return [{"id": str(e["_id"]), **e["expense"]} for e in month_data]
 
   def read_stats(self, user_id: str, from_date: datetime.date, to_date: datetime.date, top: int):
     total = 0
     category_stats = []
-    from_dt = datetime.combine(from_date, datetime.min.time())
-    to_dt = datetime.combine(to_date, datetime.min.time())
+    from_dt = datetime(from_date.year, from_date.month, from_date.day, 0, 0, 0, tzinfo=timezone.utc)
+    to_dt = datetime(to_date.year, to_date.month, to_date.day, 23, 59, 59, tzinfo=timezone.utc)
     pipeline = [
       {
         "$match": {
@@ -146,8 +146,8 @@ class DBService:
 
   def read_history(self, user_id: str, from_date: datetime.date, to_date: datetime.date):
     #get all expenses from the last n months grouped by date and category
-    from_dt = datetime.combine(from_date, datetime.min.time())
-    to_dt = datetime.combine(to_date, datetime.min.time())
+    from_dt = datetime(from_date.year, from_date.month, from_date.day, 0, 0, 0, tzinfo=timezone.utc)
+    to_dt = datetime(to_date.year, to_date.month, to_date.day, 23, 59, 59, tzinfo=timezone.utc)
     pipeline = [
       {
         "$match": {
