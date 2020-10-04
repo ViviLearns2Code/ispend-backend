@@ -46,7 +46,7 @@ class CategoryHistory(BaseModel):
 class CategoryStats(BaseModel):
     categoryname: str
     total: float
-    expenselist: List[Expense]
+    expenselist: List[ExpenseData]
 
 class MonthlyStats(BaseModel):
     monthtotal: float
