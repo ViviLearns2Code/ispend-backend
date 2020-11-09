@@ -23,8 +23,8 @@ class CategoryName(str, Enum):
     other = "Other"
 
 class ExpenseData(BaseModel):
-    title: constr(max_length=10)
-    sum: condecimal(gt=0, lt=1e4, decimal_places=2)
+    title: constr(max_length=20)
+    sum: condecimal(gt=1, lt=1e4, decimal_places=2)
     date: date
     category: CategoryName
 
