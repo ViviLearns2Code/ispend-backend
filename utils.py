@@ -52,10 +52,12 @@ class DBService:
 
   def create_new_user(self, google_id, google_name):
     user = self.user_db.insert_one({
-      "google.id": google_id,
-      "google.name": google_name
+      "google": {
+        "id": google_id,
+        "name": google_name
+      }
     })
-    return user
+    return user.inserted_id
 
   def find_user_by_google_id(self, google_id):
     user = self.user_db.find_one({ "google.id": google_id })

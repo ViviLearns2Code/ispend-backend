@@ -6,7 +6,7 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from enum import Enum
-from pydantic import BaseModel
+from pydantic import BaseModel, constr, condecimal
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from jose import jwt, JWTError
@@ -23,8 +23,8 @@ class CategoryName(str, Enum):
     other = "Other"
 
 class ExpenseData(BaseModel):
-    title: str
-    sum: float
+    title: constr(max_length=10)
+    sum: condecimal(gt=0, lt=1e4, decimal_places=2)
     date: date
     category: CategoryName
 
@@ -99,6 +99,10 @@ async def verify_jwt(token: str = Depends(oauth2_scheme)):
 async def ready():
     return {"message": "Hello World"}
 
+@app.get("/ping")
+async def is_logged_in(user_id: str = Depends(verify_jwt)):
+    return {"logged_in": True}
+
 @app.post("/login")
 async def authenticate(token: IDToken):
     #1. validate google's id_token
@@ -114,9 +118,11 @@ async def authenticate(token: IDToken):
     #2. look up user id in db
     user = dataservice.find_user_by_google_id(google_id)
     if user is None:
-        user = dataservice.create_new_user(google_id, google_name)
+        user_id = dataservice.create_new_user(google_id, google_name)
+    else:
+        user_id = user["_id"]
     #3. store jwt token in httpOnly cookie with samesite=lax
-    access_token = generate_jwt({"sub": str(user["_id"]), "iss": "ispend", "scope": "full"}, JWT_SECRET_KEY, JWT_ALGORITHM)
+    access_token = generate_jwt({"sub": str(user_id), "iss": "ispend", "scope": "full"}, JWT_SECRET_KEY, JWT_ALGORITHM)
     response = JSONResponse({"login_success": True})
     response.set_cookie(
         key=COOKIE_NAME,
