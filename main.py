@@ -1,6 +1,6 @@
 import os
 from dateutil.relativedelta import relativedelta
-from datetime import date
+from datetime import date, datetime
 from typing import List
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -130,7 +130,8 @@ async def authenticate(token: IDToken):
         domain=COOKIE_DOMAIN,
         httponly=True,
         max_age=15*60,
-        expires=15*60
+        expires=15*60,
+        samesite="lax",
     )
     #response.headers["Access-Control-Allow-Origin"] = "http://localhost:8080"
     #response.headers["Access-Control-Allow-Credentials"] = "True"
@@ -173,13 +174,5 @@ async def add_new_expense(new_expense: ExpenseData, user_id: str = Depends(verif
 @app.get("/logout")
 async def logout():
     response = JSONResponse({"logout_success": True})
-    #response.delete_cookie(key=COOKIE_NAME) does not expire cookie
-    response.set_cookie(
-        key=COOKIE_NAME,
-        value=f"",
-        domain=COOKIE_DOMAIN,
-        httponly=True,
-        max_age=-1,
-        expires=-1
-    )
+    response.delete_cookie(key=COOKIE_NAME)
     return response
