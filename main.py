@@ -165,11 +165,21 @@ async def get_monthly_statistics(to_date: date, top: int, user_id: str = Depends
 
 @app.post("/add", response_model=Expense)
 async def add_new_expense(new_expense: ExpenseData, user_id: str = Depends(verify_jwt)):
-    expense = dataservice.add_expense(user_id, new_expense.dict())
+    expense_python = new_expense.dict()
+    expense_python["sum"] = float(expense_python["sum"])
+    expense = dataservice.add_expense(user_id, expense_python)
     return expense
 
 @app.get("/logout")
 async def logout():
     response = JSONResponse({"logout_success": True})
-    response.delete_cookie(key=COOKIE_NAME, domain=COOKIE_DOMAIN)
+    #response.delete_cookie(key=COOKIE_NAME) does not expire cookie
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=f"",
+        domain=COOKIE_DOMAIN,
+        httponly=True,
+        max_age=-1,
+        expires=-1
+    )
     return response
